@@ -680,15 +680,16 @@ function pushChartData(blockId, sp, pv, output, ts) {
     State.chart.data.datasets[0].data = cd.sp;
     State.chart.data.datasets[1].data = cd.pv;
     State.chart.data.datasets[2].data = cd.out;
-    if (document.hidden) return; // Prevent background rendering freeze
+    // Skip rendering only if page was hidden for >30s (not in Kiosk mode which always reports hidden)
+    if (document.hidden && State.hiddenSince && (Date.now() - State.hiddenSince > 30000)) return;
     if (State.lowPerfMode) {
       const now = Date.now();
       if (now - State.lastChartUpdate > 1000) {
-        State.chart.update('none'); // Update without animation
+        State.chart.update('none');
         State.lastChartUpdate = now;
       }
     } else {
-      State.chart.update('none'); // Better for long running apps
+      State.chart.update('none');
     }
   }
 }
@@ -760,7 +761,9 @@ function clearHistory() {
 // Dashboard Analytics
 // ══════════════════════════════════════════════
 function updateAnalytics() {
-  if (!State.selectedBlockId || document.hidden) return;
+  if (!State.selectedBlockId) return;
+  // Skip analytics only if truly hidden for >30s (safe for Kiosk mode)
+  if (document.hidden && State.hiddenSince && (Date.now() - State.hiddenSince > 30000)) return;
   const cd = State.chartData[State.selectedBlockId];
   if (!cd || cd.pv.length < 2) return;
   const { sp, pv, out } = cd;
@@ -1534,8 +1537,16 @@ function toggleLowPerfMode() {
 
 setTimeout(checkUsbStatus, 1000);
 
+// Track actual hidden time - safe for Kiosk mode (which always reports document.hidden=true)
+State.hiddenSince = null;
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && State.selectedBlockId && State.chart) {
-    State.chart.update('none');
+  if (document.hidden) {
+    State.hiddenSince = Date.now();
+  } else {
+    State.hiddenSince = null;
+    if (State.selectedBlockId && State.chart) {
+      State.chart.update('none');
+    }
   }
 });
+
