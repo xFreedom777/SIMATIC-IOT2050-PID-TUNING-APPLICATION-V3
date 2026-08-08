@@ -668,12 +668,19 @@ function pushChartData(blockId, sp, pv, output, ts) {
   cd.out.push(isNaN(numOut) ? 0 : numOut); 
   cd.labels.push(label);
   const maxPts = State.chartWindow * 30;
-  if (cd.sp.length > maxPts) { cd.sp.shift(); cd.pv.shift(); cd.out.shift(); cd.labels.shift(); }
+  if (cd.sp.length > maxPts) {
+    const diff = cd.sp.length - maxPts;
+    cd.sp.splice(0, diff);
+    cd.pv.splice(0, diff);
+    cd.out.splice(0, diff);
+    cd.labels.splice(0, diff);
+  }
   if (blockId === State.selectedBlockId) {
     State.chart.data.labels           = cd.labels;
     State.chart.data.datasets[0].data = cd.sp;
     State.chart.data.datasets[1].data = cd.pv;
     State.chart.data.datasets[2].data = cd.out;
+    if (document.hidden) return; // Prevent background rendering freeze
     if (State.lowPerfMode) {
       const now = Date.now();
       if (now - State.lastChartUpdate > 1000) {
@@ -681,7 +688,7 @@ function pushChartData(blockId, sp, pv, output, ts) {
         State.lastChartUpdate = now;
       }
     } else {
-      State.chart.update();
+      State.chart.update('none'); // Better for long running apps
     }
   }
 }
@@ -725,7 +732,13 @@ function setChartWindow(val) {
   const maxPts = State.chartWindow * 30;
   Object.keys(State.chartData).forEach(id => {
     const cd = State.chartData[id];
-    while (cd.sp.length > maxPts) { cd.sp.shift(); cd.pv.shift(); cd.out.shift(); cd.labels.shift(); }
+    if (cd.sp.length > maxPts) {
+      const diff = cd.sp.length - maxPts;
+      cd.sp.splice(0, diff);
+      cd.pv.splice(0, diff);
+      cd.out.splice(0, diff);
+      cd.labels.splice(0, diff);
+    }
   });
   if (State.selectedBlockId) rebuildChart(State.selectedBlockId);
 }
@@ -747,7 +760,7 @@ function clearHistory() {
 // Dashboard Analytics
 // ══════════════════════════════════════════════
 function updateAnalytics() {
-  if (!State.selectedBlockId) return;
+  if (!State.selectedBlockId || document.hidden) return;
   const cd = State.chartData[State.selectedBlockId];
   if (!cd || cd.pv.length < 2) return;
   const { sp, pv, out } = cd;
@@ -1079,11 +1092,14 @@ function closeModal(id) { document.getElementById(id).style.display = 'none'; }
 // ══════════════════════════════════════════════
 function toast(msg, type = 'info', duration = 3200) {
   const c  = document.getElementById('toastContainer');
+  while (c.children.length >= 5) {
+    c.removeChild(c.firstChild);
+  }
   const el = document.createElement('div');
   el.className   = `toast ${type}`;
   el.textContent = msg;
   c.appendChild(el);
-  setTimeout(() => el.remove(), duration);
+  setTimeout(() => { if (el.parentNode === c) el.remove(); }, duration);
 }
 
 // ════════════════════════════════════════════════
@@ -1517,3 +1533,9 @@ function toggleLowPerfMode() {
 }
 
 setTimeout(checkUsbStatus, 1000);
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && State.selectedBlockId && State.chart) {
+    State.chart.update('none');
+  }
+});
