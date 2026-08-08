@@ -7,14 +7,14 @@ Write-Host "=============================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Get IP Address (Defaulting to the one in your screenshot)
-$iot_ip = Read-Host "Enter IOT2050 IP Address [Press Enter for 192.168.121.211]"
-if ([string]::IsNullOrWhiteSpace($iot_ip)) { $iot_ip = "192.168.121.211" }
+$iot_ip = Read-Host "Enter IOT2050 IP Address [Press Enter for 192.168.121.214]"
+if ([string]::IsNullOrWhiteSpace($iot_ip)) { $iot_ip = "192.168.121.214" }
 
 $iot_user = "root"
 
 # Get Destination Path
-$iot_path = Read-Host "Enter Destination Path on IOT2050 [Press Enter for /opt/pid-tuning-app/MITRPHOL-Backup]"
-if ([string]::IsNullOrWhiteSpace($iot_path)) { $iot_path = "/opt/pid-tuning-app/MITRPHOL-Backup" }
+$iot_path = Read-Host "Enter Destination Path on IOT2050 [Press Enter for /opt/pid-tuning-app]"
+if ([string]::IsNullOrWhiteSpace($iot_path)) { $iot_path = "/opt/pid-tuning-app" }
 
 Write-Host "`n[1/5] Deploying index.html..." -ForegroundColor Yellow
 scp .\public\index.html ${iot_user}@${iot_ip}:${iot_path}/public/

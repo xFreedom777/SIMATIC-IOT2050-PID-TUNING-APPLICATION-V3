@@ -112,7 +112,15 @@ function connectWebSocket() {
     };
     State.ws.onmessage = (evt) => {
       const msg = JSON.parse(evt.data);
-      if (msg.type === 'status') onStatus(msg);
+      if (msg.type === 'status') {
+        onStatus(msg);
+        if (msg.reason === 'ghost_timeout') {
+toast('Ghost connection cleared! Reconnecting in 20s...', 'info', 3000);
+          setTimeout(() => {
+            if (State.mode === 'disconnected') scheduleAutoConnect(20000);
+          }, 1000);
+        }
+      }
       if (msg.type === 'data')   onData(msg);
       if (msg.type === 'error')  { toast(msg.message, 'error'); }
     };
@@ -256,16 +264,25 @@ async function fetchStatus() {
     const bdata = await api('GET', '/api/blocks');
     bdata.blocks.forEach(b => {
       State.blocks[b.id] = b;
-      State.chartData[b.id] = { sp:[], pv:[], out:[], labels:[] };
+      if (!State.chartData[b.id]) {
+        State.chartData[b.id] = { sp:[], pv:[], out:[], labels:[] };
+      }
     });
     renderBlockList();
-  } catch (_) {}
+  } catch (err) {
+    if (State.mode !== 'disconnected') {
+      State.mode = 'disconnected';
+      updateStatusUI();
+      // Unexpected disconnect (backend crash) -> Trigger Auto-Connect
+      scheduleAutoConnect(20000);
+    }
+  }
 }
 
 // ══════════════════════════════════════════════
 // Connection
 // ══════════════════════════════════════════════
-async function toggleConnect() {
+async function toggleConnect(isAuto = false) {
   if (State.mode === 'plc') {
     try { 
       await api('DELETE', '/api/connect'); 
@@ -286,18 +303,18 @@ async function toggleConnect() {
     
     if (!ip) return toast('Enter PLC IP address', 'warning');
     const btn = document.getElementById('connectBtn');
-    btn.textContent = '⏳ Connecting...';
-    btn.disabled = true;
+    btn.textContent = '⏳ Connecting (Click to retry)...';
+    // NOT disabling the button!
     try {
       await api('POST', '/api/connect', { ip, rack, slot });
+      
       toast(`Connected to S7-1200 at ${ip}`, 'success');
       State.mode = 'plc';
       updateStatusUI();
-    } catch (e) { 
+    } catch (e) {
       toast(e.message, 'error'); 
-      btn.textContent = '⚡ Connect to PLC'; 
+      btn.innerHTML = '<span>⚡</span> Connect to PLC'; 
     }
-    finally { btn.disabled = false; }
   }
 }
 
@@ -321,7 +338,8 @@ function updateStatusUI() {
     statusTxt.textContent = 'PLC Connected';
     modeChip.textContent  = 'LIVE PLC';
     connectBtn.innerHTML  = '<span>⛔</span> Disconnect';
-    connectBtn.className  = 'btn btn-danger btn-full';
+    connectBtn.classList.remove('btn-primary');
+    connectBtn.classList.add('btn-danger');
     simBtn.disabled = true;
     readBtn.disabled = false;
     offsetBtn.disabled = false;
@@ -329,7 +347,8 @@ function updateStatusUI() {
     statusTxt.textContent = 'Simulation Running';
     modeChip.textContent  = 'SIMULATION';
     connectBtn.innerHTML  = '<span>⚡</span> Connect to PLC';
-    connectBtn.className  = 'btn btn-primary btn-full';
+    connectBtn.classList.remove('btn-danger');
+    connectBtn.classList.add('btn-primary');
     simBtn.disabled = false;
     simBtn.textContent = '⬛ Stop Simulation';
     readBtn.disabled = true;
@@ -338,7 +357,9 @@ function updateStatusUI() {
     statusTxt.textContent = 'Disconnected';
     modeChip.textContent  = 'OFFLINE';
     connectBtn.innerHTML  = '<span>⚡</span> Connect to PLC';
-    connectBtn.className  = 'btn btn-primary btn-full';
+    connectBtn.classList.remove('btn-danger');
+    connectBtn.classList.add('btn-primary');
+    connectBtn.disabled = false;
     simBtn.disabled = false;
     simBtn.textContent = '🔬 Start Simulation';
     readBtn.disabled = true;
@@ -628,6 +649,9 @@ function initChart() {
     }
     return;
   }
+  // Fix memory leak on drawing
+  Chart.defaults.animation = false;
+  
   const ctx = document.getElementById('trendChart').getContext('2d');
   State.chart = new Chart(ctx, {
     type: 'line',
@@ -1529,9 +1553,9 @@ setTimeout(checkUsbStatus, 1000);
     @keyframes ring-pulse-red   { 0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.7)}  50%{box-shadow:0 0 0 10px rgba(239,68,68,0)} }
     @keyframes ring-pulse-green { 0%,100%{box-shadow:0 0 0 0 rgba(34,197,94,.7)}  50%{box-shadow:0 0 0 10px rgba(34,197,94,0)} }
     @keyframes ring-pulse-orange{ 0%,100%{box-shadow:0 0 0 0 rgba(249,115,22,.7)} 50%{box-shadow:0 0 0 10px rgba(249,115,22,0)} }
-    .ring-red    { animation: ring-pulse-red    1.2s infinite; outline: 2.5px solid #ef4444 !important; }
-    .ring-green  { animation: ring-pulse-green  1.2s infinite; outline: 2.5px solid #22c55e !important; }
-    .ring-orange { animation: ring-pulse-orange 1.2s infinite; outline: 2.5px solid #f97316 !important; }
+    .ring-red, body.low-perf .ring-red       { animation: ring-pulse-red    1.2s infinite !important; outline: 2.5px solid #ef4444 !important; }
+    .ring-green, body.low-perf .ring-green   { animation: ring-pulse-green  1.2s infinite !important; outline: 2.5px solid #22c55e !important; }
+    .ring-orange, body.low-perf .ring-orange { animation: ring-pulse-orange 1.2s infinite !important; outline: 2.5px solid #f97316 !important; }
     .countdown-badge {
       position:absolute; top:-8px; right:-8px; background:#1e293b; color:#fff;
       font-size:10px; font-weight:700; border-radius:50%; width:20px; height:20px;
@@ -1562,62 +1586,33 @@ setTimeout(checkUsbStatus, 1000);
   }, 1500);
 })();
 
-// ── Feature 2: Auto-Connect countdown (GREEN ring, 30s) ──────
-(function autoConnect() {
-  let countdown = 30;
-  let cancelled = false;
-  let timer = null;
-
-  function cancel() {
-    if (cancelled) return;
-    cancelled = true;
-    clearInterval(timer);
-    const btn = document.getElementById('connectBtn');
-    const badge = document.getElementById('autoConnectBadge');
-    if (btn) btn.classList.remove('ring-green');
-    if (badge) badge.remove();
-  }
-
-  // Cancel if user edits IP / Rack / Slot
-  ['plcIp','plcRack','plcSlot'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener('input', cancel, { once: true });
-  });
-
-  // Also cancel if user manually clicks connect
-  const connectBtn = document.getElementById('connectBtn');
-  if (connectBtn) connectBtn.addEventListener('click', cancel, { once: true });
-
-  // Wait for page to fully load before starting
-  setTimeout(() => {
-    if (cancelled || State.mode === 'plc') return;
-
-    const btn = document.getElementById('connectBtn');
-    if (!btn) return;
-
-    // Add green ring + badge
-    btn.style.position = 'relative';
+// ── Feature 2: Unified Auto-Connect ──────
+function scheduleAutoConnect(delay = 20000) {
+  if (window._isAutoRecovering) return; // Already recovering
+  window._isAutoRecovering = true;
+  clearTimeout(window._autoConnectTimer);
+  
+  const btn = document.getElementById('connectBtn');
+  if (btn) {
     btn.classList.add('ring-green');
-    const badge = document.createElement('div');
-    badge.id = 'autoConnectBadge';
-    badge.className = 'countdown-badge';
-    badge.textContent = countdown;
-    btn.appendChild(badge);
-
-    timer = setInterval(async () => {
-      if (cancelled || State.mode === 'plc') { cancel(); return; }
-      countdown--;
-      badge.textContent = countdown;
-      if (countdown <= 0) {
-        cancel();
-        if (State.mode !== 'plc') {
-          toast('🤖 Auto-Connect: Connecting to PLC...', 'info', 2000);
-          await toggleConnect();
-        }
-      }
-    }, 1000);
-  }, 2000);
-})();
+    btn.disabled = true;
+    btn.innerHTML = '⏳ Auto-Recovering...';
+  }
+  
+  let cd = delay / 1000;
+  toast('🤖 Auto-Connect scheduled in ' + cd + 's...', 'warning', delay);
+  
+  window._autoConnectTimer = setTimeout(() => {
+    if (btn) {
+      btn.classList.remove('ring-green');
+      btn.disabled = false;
+    }
+    if (State.mode === 'disconnected') {
+      window._isAutoRecovering = false; // reset flag before calling
+      toggleConnect(true); // Call the manual function!
+    }
+  }, delay);
+}
 
 // ── Feature 3: Auto-Select first loop countdown (ORANGE ring, 20s) ──
 (function autoSelectLoop() {
@@ -1688,3 +1683,12 @@ setTimeout(checkUsbStatus, 1000);
     }
   }, 500);
 })();
+
+// KIOSK BEHAVIOR: Always auto-connect on boot after 2 seconds if not connected
+setTimeout(() => {
+  if (State.mode === 'disconnected') {
+    toast('Kiosk Boot: Initiating Auto-Connect...', 'info', 3000);
+    scheduleAutoConnect(20000);
+  }
+}, 2000);
+

@@ -134,7 +134,10 @@ app.post('/api/connect', async (req, res) => {
     if (s7) { s7.disconnect(); s7 = null; }
 
     s7 = new S7Client();
-    await s7.connect({ host: ip, rack: parseInt(rack), slot: parseInt(slot) });
+    const connectPromise = s7.connect({ host: ip, rack: parseInt(rack), slot: parseInt(slot) });
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('PLC Connection Timeout (PLC socket might be busy)')), 5000));
+    await Promise.race([connectPromise, timeoutPromise]);
+    
     appMode = 'plc';
 
     broadcast({ type: 'status', connected: true, mode: 'plc', plcIp: ip });
@@ -149,7 +152,7 @@ app.post('/api/connect', async (req, res) => {
 
 app.delete('/api/connect', (req, res) => {
   try {
-    stopPoller();
+    if (s7) { s7.disconnect(); s7 = null; }
     appMode = 'disconnected';
     if (s7) {
       s7.dropConnection(() => {
@@ -466,6 +469,7 @@ app.get('/api/tune/imc', (req, res) => {
 let isPolling = false;
 function startPoller() {
   stopPoller();
+  isPolling = false; // Reset to prevent ghost connection lockup
   pollerTimer = setInterval(async () => {
     if (isPolling) return; // Prevent callback stacking if PLC response is delayed
     isPolling = true;
@@ -476,7 +480,9 @@ function startPoller() {
           let data = null;
 
           if (appMode === 'plc' && s7) {
-            data = await s7.readMonitorValues(blocks[id].dbNumber, blocks[id].offsets);
+            const readPromise = s7.readMonitorValues(blocks[id].dbNumber, blocks[id].offsets);
+            const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('PLC Read Timeout')), 2000));
+            data = await Promise.race([readPromise, timeoutPromise]);
           } else if (appMode === 'simulation' && sim) {
             data = sim.step(id);
           }
@@ -530,6 +536,11 @@ function startPoller() {
           console.error(`[Poll] ${id}:`, err.message);
           if (appMode === 'plc') {
             broadcast({ type: 'error', blockId: id, message: err.message });
+            if (err.message === 'PLC Read Timeout' || err.message.includes('Timeout')) {
+              appMode = 'disconnected';
+              if (s7) { s7.disconnect(); s7 = null; }
+              broadcast({ type: 'status', connected: false, mode: 'disconnected', reason: 'ghost_timeout' });
+            }
           }
         }
       }
