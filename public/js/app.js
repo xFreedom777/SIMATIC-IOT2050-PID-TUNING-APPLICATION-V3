@@ -1517,3 +1517,174 @@ function toggleLowPerfMode() {
 }
 
 setTimeout(checkUsbStatus, 1000);
+
+// ════════════════════════════════════════════════
+// 🤖 KIOSK AUTO-PILOT (3 features)
+// ════════════════════════════════════════════════
+
+// ── CSS for countdown rings ───────────────────────
+(function injectAutoPilotCSS() {
+  const style = document.createElement('style');
+  style.textContent = `
+    @keyframes ring-pulse-red   { 0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.7)}  50%{box-shadow:0 0 0 10px rgba(239,68,68,0)} }
+    @keyframes ring-pulse-green { 0%,100%{box-shadow:0 0 0 0 rgba(34,197,94,.7)}  50%{box-shadow:0 0 0 10px rgba(34,197,94,0)} }
+    @keyframes ring-pulse-orange{ 0%,100%{box-shadow:0 0 0 0 rgba(249,115,22,.7)} 50%{box-shadow:0 0 0 10px rgba(249,115,22,0)} }
+    .ring-red    { animation: ring-pulse-red    1.2s infinite; outline: 2.5px solid #ef4444 !important; }
+    .ring-green  { animation: ring-pulse-green  1.2s infinite; outline: 2.5px solid #22c55e !important; }
+    .ring-orange { animation: ring-pulse-orange 1.2s infinite; outline: 2.5px solid #f97316 !important; }
+    .countdown-badge {
+      position:absolute; top:-8px; right:-8px; background:#1e293b; color:#fff;
+      font-size:10px; font-weight:700; border-radius:50%; width:20px; height:20px;
+      display:flex; align-items:center; justify-content:center; pointer-events:none; z-index:999;
+    }
+  `;
+  document.head.appendChild(style);
+})();
+
+// ── Feature 1: Auto enable Low Perf Mode on boot (RED ring) ──
+(function autoPerfLow() {
+  setTimeout(() => {
+    if (!State.lowPerfMode) {
+      const btn = document.getElementById('perfToggleBtn');
+      if (!btn) return;
+      // Enable Low Perf
+      State.lowPerfMode = true;
+      document.body.classList.add('low-perf');
+      btn.innerHTML = '🐢 Perf: Low';
+      btn.classList.replace('btn-ghost', 'btn-amber');
+      // Add red ring
+      btn.style.position = 'relative';
+      btn.classList.add('ring-red');
+      // Remove ring after 5 seconds
+      setTimeout(() => btn.classList.remove('ring-red'), 5000);
+      toast('🐢 Low Performance Mode — Auto enabled for Kiosk', 'info', 3000);
+    }
+  }, 1500);
+})();
+
+// ── Feature 2: Auto-Connect countdown (GREEN ring, 30s) ──────
+(function autoConnect() {
+  let countdown = 30;
+  let cancelled = false;
+  let timer = null;
+
+  function cancel() {
+    if (cancelled) return;
+    cancelled = true;
+    clearInterval(timer);
+    const btn = document.getElementById('connectBtn');
+    const badge = document.getElementById('autoConnectBadge');
+    if (btn) btn.classList.remove('ring-green');
+    if (badge) badge.remove();
+  }
+
+  // Cancel if user edits IP / Rack / Slot
+  ['plcIp','plcRack','plcSlot'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', cancel, { once: true });
+  });
+
+  // Also cancel if user manually clicks connect
+  const connectBtn = document.getElementById('connectBtn');
+  if (connectBtn) connectBtn.addEventListener('click', cancel, { once: true });
+
+  // Wait for page to fully load before starting
+  setTimeout(() => {
+    if (cancelled || State.mode === 'plc') return;
+
+    const btn = document.getElementById('connectBtn');
+    if (!btn) return;
+
+    // Add green ring + badge
+    btn.style.position = 'relative';
+    btn.classList.add('ring-green');
+    const badge = document.createElement('div');
+    badge.id = 'autoConnectBadge';
+    badge.className = 'countdown-badge';
+    badge.textContent = countdown;
+    btn.appendChild(badge);
+
+    timer = setInterval(async () => {
+      if (cancelled || State.mode === 'plc') { cancel(); return; }
+      countdown--;
+      badge.textContent = countdown;
+      if (countdown <= 0) {
+        cancel();
+        if (State.mode !== 'plc') {
+          toast('🤖 Auto-Connect: Connecting to PLC...', 'info', 2000);
+          await toggleConnect();
+        }
+      }
+    }, 1000);
+  }, 2000);
+})();
+
+// ── Feature 3: Auto-Select first loop countdown (ORANGE ring, 20s) ──
+(function autoSelectLoop() {
+  let countdown = 20;
+  let cancelled = false;
+  let timer = null;
+  let started = false;
+
+  function cancel() {
+    if (cancelled) return;
+    cancelled = true;
+    clearInterval(timer);
+    const badge = document.getElementById('autoLoopBadge');
+    if (badge) badge.remove();
+    const firstItem = document.querySelector('.block-item');
+    if (firstItem) firstItem.classList.remove('ring-orange');
+  }
+
+  function startLoopCountdown() {
+    if (started || cancelled) return;
+    started = true;
+
+    setTimeout(() => {
+      if (cancelled || State.selectedBlockId) return;
+      const firstItem = document.querySelector('.block-item');
+      if (!firstItem) return;
+
+      // Orange ring on first loop item
+      firstItem.style.position = 'relative';
+      firstItem.classList.add('ring-orange');
+      const badge = document.createElement('div');
+      badge.id = 'autoLoopBadge';
+      badge.className = 'countdown-badge';
+      badge.style.background = '#f97316';
+      badge.textContent = countdown;
+      firstItem.appendChild(badge);
+
+      // Cancel if user clicks any block
+      document.querySelectorAll('.block-item').forEach(el => {
+        el.addEventListener('click', cancel, { once: true });
+      });
+
+      timer = setInterval(() => {
+        if (cancelled || State.selectedBlockId) { cancel(); return; }
+        countdown--;
+        badge.textContent = countdown;
+        if (countdown <= 0) {
+          cancel();
+          const ids = Object.keys(State.blocks);
+          if (ids.length > 0 && !State.selectedBlockId) {
+            toast('🤖 Auto-Select: Selecting first PID loop...', 'info', 2000);
+            selectBlock(ids[0]);
+          }
+        }
+      }, 1000);
+    }, 1500);
+  }
+
+  // Watch for PLC connect then start orange countdown
+  const origOnStatus = window._origOnStatus || onStatus;
+  window._origOnStatus = origOnStatus;
+  // Poll for connect state every 500ms
+  const watchConnect = setInterval(() => {
+    if (cancelled) { clearInterval(watchConnect); return; }
+    if (State.mode === 'plc') {
+      clearInterval(watchConnect);
+      startLoopCountdown();
+    }
+  }, 500);
+})();
