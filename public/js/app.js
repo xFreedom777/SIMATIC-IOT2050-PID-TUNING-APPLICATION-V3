@@ -668,28 +668,20 @@ function pushChartData(blockId, sp, pv, output, ts) {
   cd.out.push(isNaN(numOut) ? 0 : numOut); 
   cd.labels.push(label);
   const maxPts = State.chartWindow * 30;
-  if (cd.sp.length > maxPts) {
-    const diff = cd.sp.length - maxPts;
-    cd.sp.splice(0, diff);
-    cd.pv.splice(0, diff);
-    cd.out.splice(0, diff);
-    cd.labels.splice(0, diff);
-  }
+  if (cd.sp.length > maxPts) { cd.sp.shift(); cd.pv.shift(); cd.out.shift(); cd.labels.shift(); }
   if (blockId === State.selectedBlockId) {
     State.chart.data.labels           = cd.labels;
     State.chart.data.datasets[0].data = cd.sp;
     State.chart.data.datasets[1].data = cd.pv;
     State.chart.data.datasets[2].data = cd.out;
-    // Skip rendering only if page was hidden for >30s (not in Kiosk mode which always reports hidden)
-    if (document.hidden && State.hiddenSince && (Date.now() - State.hiddenSince > 30000)) return;
     if (State.lowPerfMode) {
       const now = Date.now();
       if (now - State.lastChartUpdate > 1000) {
-        State.chart.update('none');
+        State.chart.update('none'); // Update without animation
         State.lastChartUpdate = now;
       }
     } else {
-      State.chart.update('none');
+      State.chart.update();
     }
   }
 }
@@ -733,13 +725,7 @@ function setChartWindow(val) {
   const maxPts = State.chartWindow * 30;
   Object.keys(State.chartData).forEach(id => {
     const cd = State.chartData[id];
-    if (cd.sp.length > maxPts) {
-      const diff = cd.sp.length - maxPts;
-      cd.sp.splice(0, diff);
-      cd.pv.splice(0, diff);
-      cd.out.splice(0, diff);
-      cd.labels.splice(0, diff);
-    }
+    while (cd.sp.length > maxPts) { cd.sp.shift(); cd.pv.shift(); cd.out.shift(); cd.labels.shift(); }
   });
   if (State.selectedBlockId) rebuildChart(State.selectedBlockId);
 }
@@ -762,8 +748,6 @@ function clearHistory() {
 // ══════════════════════════════════════════════
 function updateAnalytics() {
   if (!State.selectedBlockId) return;
-  // Skip analytics only if truly hidden for >30s (safe for Kiosk mode)
-  if (document.hidden && State.hiddenSince && (Date.now() - State.hiddenSince > 30000)) return;
   const cd = State.chartData[State.selectedBlockId];
   if (!cd || cd.pv.length < 2) return;
   const { sp, pv, out } = cd;
@@ -1095,14 +1079,11 @@ function closeModal(id) { document.getElementById(id).style.display = 'none'; }
 // ══════════════════════════════════════════════
 function toast(msg, type = 'info', duration = 3200) {
   const c  = document.getElementById('toastContainer');
-  while (c.children.length >= 5) {
-    c.removeChild(c.firstChild);
-  }
   const el = document.createElement('div');
   el.className   = `toast ${type}`;
   el.textContent = msg;
   c.appendChild(el);
-  setTimeout(() => { if (el.parentNode === c) el.remove(); }, duration);
+  setTimeout(() => el.remove(), duration);
 }
 
 // ════════════════════════════════════════════════
@@ -1536,17 +1517,3 @@ function toggleLowPerfMode() {
 }
 
 setTimeout(checkUsbStatus, 1000);
-
-// Track actual hidden time - safe for Kiosk mode (which always reports document.hidden=true)
-State.hiddenSince = null;
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) {
-    State.hiddenSince = Date.now();
-  } else {
-    State.hiddenSince = null;
-    if (State.selectedBlockId && State.chart) {
-      State.chart.update('none');
-    }
-  }
-});
-
