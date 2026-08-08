@@ -100,7 +100,14 @@ let lastLogTime = {};
 function broadcast(data) {
   const msg = JSON.stringify(data);
   wss.clients.forEach(c => {
-    if (c.readyState === WebSocket.OPEN) c.send(msg);
+    if (c.readyState === WebSocket.OPEN) {
+      if (c.bufferedAmount > 1024 * 1024) { // 1MB backpressure limit
+        console.warn('[WebSocket] Client dropped due to high backpressure (RAM protection)');
+        c.terminate();
+      } else {
+        c.send(msg);
+      }
+    }
   });
 }
 
@@ -539,7 +546,23 @@ function stopPoller() {
 // ═══════════════════════════════════════════════
 // WebSocket — send current state on connect
 // ═══════════════════════════════════════════════
+const pingInterval = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) {
+      console.warn('[WebSocket] Client timeout. Terminating connection.');
+      return ws.terminate();
+    }
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 30000);
+
+wss.on('close', () => clearInterval(pingInterval));
+
 wss.on('connection', (ws) => {
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+
   ws.send(JSON.stringify({
     type: 'status',
     connected: appMode !== 'disconnected',
